@@ -1,0 +1,246 @@
+---
+title: "Implementing Old Path Redirection in Next.js Contentlayer Blog - Modern Next.js Blog Series #29"
+description: "Implementing redirection for each MDX article's old path within Next.js's getStaticProps"
+slug: "contentlayer-redirection"
+language: en
+socialImage: ""
+date: 2022-10-14
+type: Post
+isDraft: false
+---
+
+> This article is also published at [it 邦幫忙 2022 iThome Ironman Contest](https://ithelp.ithome.com.tw/articles/10308729)
+
+This is the last implementation article of this series, where we'll implement a small but important feature: old path redirection!
+
+> The code changes for this article are as follows:
+> https://github.com/eason-dev/nextjs-tailwind-contentlayer-blog-starter/compare/day28-i18next...day29-old-post-path-redirect
+
+---
+
+## Old Path Redirection in Next.js Contentlayer Blog
+
+After running a blog for some time, you might want to adjust the URLs of articles for various reasons, such as:
+
+> Redirecting [https://easonchang.com/2016/12/13/grid-note](https://easonchang.com/2016/12/13/grid-note)
+>
+> to [https://easonchang.com/posts/grid-note](https://easonchang.com/posts/grid-note)
+
+In Next.js, there are two ways to implement redirection (redirect):
+
+1. List all redirection rules in next.config.js, refer to the official documentation "[Data Fetching: getStaticProps | Next.js](https://nextjs.org/docs/api-reference/data-fetching/get-static-props#redirect)"
+2. In getStaticProps or getServerSideProps, return redirect based on custom conditions, refer to the official documentation "[Data Fetching: getStaticProps | Next.js](https://nextjs.org/docs/api-reference/data-fetching/get-static-props#redirect)"
+
+We want the redirection rules to be customizable for each article, written inside the .mdx file of the article. Therefore, we need to analyze all articles with Contentlayer to know all redirection rules.
+
+After attempting, method 1 is not feasible because you cannot import Contentlayer's allPosts in next.config.js.
+
+Thus, this article will use method 2, deciding whether to redirect within getStaticProps.
+
+### Implementing Old Path Redirection
+
+First, modify `contentlayer.config.ts` to add a redirectFrom attribute to Post. This allows setting individual redirection rules in each article's .mdx file:
+
+```ts
+// ...
+
+export const Post = defineDocumentType(() => ({
+  // ...
+  fields: {
+    // ...
+    // Add redirectFrom
+    redirectFrom: {
+      type: "list",
+      of: { type: "string" },
+    },
+  },
+  // ...
+}));
+
+// ...
+```
+
+Add `src/lib/getAllRedirects.ts` to get all paths that need to be redirected:
+
+```ts
+import { allPosts } from "@/lib/contentLayerAdapter";
+import { unifyPath } from "@/lib/unifyPath";
+
+export type Redirect = {
+  source: string;
+  destination: string;
+  permanent: boolean;
+};
+
+export const getAllRedirects = () => {
+  const redirects: Redirect[] = [];
+
+  allPosts.forEach((post) => {
+    const allRedirectFrom =
+      post.redirectFrom?.map((from) => unifyPath(from)) || [];
+    allRedirectFrom.forEach((from) => {
+      redirects.push({
+        source: from,
+        destination: post.path,
+        permanent: false,
+      });
+    });
+  });
+
+  return redirects;
+};
+
+export const allRedirects = getAllRedirects();
+```
+
+Add `src/lib/unifyPath.ts` to normalize paths for redirection:
+
+```ts
+// Discard leading and trailing slashes
+export const unifyPath = (path: string): string => {
+  return "/" + path.replace(/\/$/, "").replace(/^\//, "");
+};
+```
+
+Add `src/lib/stringifyCatchAllDynamicRoute.ts` to convert route to string for easier processing later:
+
+```ts
+export const stringifyCatchAllDynamicRoute = (
+  route: string | string[] | undefined
+): string => {
+  if (!route) return "";
+  if (Array.isArray(route)) return route.join("/");
+  return route;
+};
+```
+
+Finally, modify all pages that use dynamic routes, currently only the article detail page `[slug].tsx` needs modification.
+
+Modify `src/pages/posts/[slug].tsx`:
+
+```tsx
+// ...
+import { allRedirects } from "@/lib/getAllRedirects";
+import { unifyPath } from "@/lib/unifyPath";
+// ...
+
+export const getStaticProps: GetStaticProps<Props, Params> = async (
+  context
+) => {
+  const { slug } = context.params!;
+  const locale = context.locale!;
+
+  // Add the following redirection logic
+  // Handle redirect
+
+  logic;
+  const path = unifyPath("/posts/" + slug);
+  const matchedRedirectRule = allRedirects.find((rule) => rule.source === path);
+  if (matchedRedirectRule) {
+    return {
+      redirect: {
+        destination: matchedRedirectRule.destination,
+        permanent: matchedRedirectRule.permanent,
+      },
+    };
+  }
+  // ...
+};
+
+// ...
+```
+
+And add `src/pages/[...pathToRedirectFrom].tsx` to catch all other paths:
+
+```tsx
+import { GetStaticPaths, GetStaticProps } from "next";
+import { ParsedUrlQuery } from "querystring";
+
+import { allRedirects, Redirect } from "@/lib/getAllRedirects";
+import { stringifyCatchAllDynamicRoute } from "@/lib/stringifyCatchAllDynamicRoute";
+import { unifyPath } from "@/lib/unifyPath";
+
+interface Params extends ParsedUrlQuery {
+  pathToRedirectFrom: string | string[];
+}
+
+export const getStaticPaths: GetStaticPaths = () => {
+  return {
+    paths: [],
+    fallback: "blocking",
+  };
+};
+
+export const getStaticProps: GetStaticProps<any, Params> = (context) => {
+  const { pathToRedirectFrom } = context.params!;
+
+  // Handle redirect logic
+  const path = unifyPath(stringifyCatchAllDynamicRoute(pathToRedirectFrom));
+  const matchedRedirectRule: Redirect | undefined = allRedirects.find(
+    (rule) => rule.source === path
+  );
+  if (matchedRedirectRule) {
+    return {
+      redirect: {
+        destination: matchedRedirectRule.destination,
+        permanent: matchedRedirectRule.permanent,
+      },
+    };
+  }
+
+  return {
+    notFound: true,
+  };
+};
+
+const NullComponent = () => null;
+
+export default NullComponent;
+```
+
+### Setting Redirection Rules for Articles
+
+Now, you can use the redirectFrom attribute added to Contentlayer Post to specify redirection rules for each article.
+
+For example, I set `content/posts/20220904-custom-link-demo.mdx` as follows:
+
+```markdown
+---
+// ...
+type: Post
+slug: custom-link-demo
+redirectFrom:
+  - /old-custom-link/
+  - /2022/08/01/custom-link/
+  - /posts/old-custom-link/
+---
+
+Content...
+```
+
+The `slug` defines the current path of the article, which will be http://localhost:3000/posts/custom-link-demo
+
+The `redirectFrom` specifies the following 3 old paths, all redirecting to the latest article path:
+
+- http://localhost:3000/old-custom-link/
+- http://localhost:3000/2022/08/01/custom-link/
+- http://localhost:3000/posts/old-custom-link/
+
+## Results
+
+That's it! By running `pnpm dev` and browsing to the old paths you've set, you'll see that you're directly redirected to the correct article path, still able to browse the article smoothly!
+
+> The code changes for this article are as follows:
+> https://github.com/eason-dev/nextjs-tailwind-contentlayer-blog-starter/compare/day28-i18next...day29-old-post-path-redirect
+
+## References
+
+- [Data Fetching: getStaticProps | Next.js](https://nextjs.org/docs/api-reference/data-fetching/get-static-props#redirect)
+
+## Conclusion & Next Article
+
+Congratulations on successfully implementing old path redirection in your Next.js Contentlayer blog!
+
+And congratulations on completing all the implementations in this series!
+
+In the next article, which is also the last one, we'll summarize and review these 30 articles and the dazzling blog we've built together!
